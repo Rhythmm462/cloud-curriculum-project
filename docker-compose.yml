@@ -1,0 +1,154 @@
+version: "3.1"
+services:
+
+  user_database:
+    image: postgres
+    restart: on-failure
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_USER: ${USER_DB_USERNAME}
+      POSTGRES_PASSWORD: ${USER_DB_PASSWORD}
+      POSTGRES_DB: ${USER_DB_DATABASE}
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - ./userdb:/var/lib/postgresql/data
+      - ./db/userInit.sql:/docker-entrypoint-initdb.d/userInit.sql
+    networks:
+      - cloud-services
+
+  product_database:
+    image: mongo
+    restart: on-failure
+    ports:
+      - 27017:27017
+    networks:
+      - cloud-services
+
+  nginx:
+    restart: on-failure
+    image: nginx
+    ports:
+      - 80:80
+    depends_on:
+      - user_service
+      - product_service
+      - order_service
+      - shipping_service
+    networks:
+      - cloud-services
+
+  order_database:
+    image: postgres
+    restart: on-failure
+    ports:
+      - 5433:5432
+    environment:
+      POSTGRES_USER: ${ORDER_DB_USERNAME}
+      POSTGRES_PASSWORD: ${ORDER_DB_PASSWORD}
+      POSTGRES_DB: ${ORDER_DB_DATABASE}
+    volumes:
+      - ./orderdb:/var/lib/postgresql/data
+      - ./db/orderInit.sql:/docker-entrypoint-initdb.d/orderInit.sql
+    networks:
+      - cloud-services
+
+  shipping_service:
+    restart: on-failure
+    build:
+      context: ./shipping-service
+      dockerfile: Dockerfile
+    environment:
+      AMQP_URL: amqp://rabbitmq:5672
+    depends_on:
+      - rabbitmq
+    networks:
+      - cloud-services
+
+  product_service:
+    restart: on-failure
+    build:
+      context: ./products-service
+      dockerfile: Dockerfile
+    ports:
+      - 3003:3003
+    environment:
+      PRODUCT_PORT: 3003
+      MONGO_DB: ${MONGO_DB}
+      MONGO_HOST:  ${MONGO_HOST}
+
+    depends_on:
+      - product_database
+    networks:
+      - cloud-services
+
+  user_service:
+    restart: on-failure
+    build:
+      context: ./users-service
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_USER: ${USER_DB_USERNAME}
+      POSTGRES_PASSWORD: ${USER_DB_PASSWORD}
+      POSTGRES_DB: ${USER_DB_DATABASE}
+      USER_PORT: ${ORDER_PORT}
+      POSTGRES_PORT: 5432
+      POSTGRES_HOST: ${USER_DB_HOST}
+    ports:
+      - 3002:3002
+    depends_on:
+      - user_database
+    # command: npm run start
+    networks:
+      - cloud-services
+
+  order_service:
+    restart: on-failure
+    build:
+      context: ./orders-service
+      dockerfile: Dockerfile
+    environment:
+      ORDER_PORT: 3001
+      POSTGRES_USER: ${ORDER_DB_USERNAME}
+      POSTGRES_PASSWORD: ${ORDER_DB_PASSWORD}
+      POSTGRES_DB: ${ORDER_DB_DATABASE}
+      POSTGRES_PORT: ${ORDER_PORT}
+      POSTGRES_HOST: ${ORDER_DB_HOST}
+     
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+    ports:
+      - 3001:3001
+    depends_on:
+      - order_database
+      - rabbitmq
+    # command: npm run start
+    networks:
+      - cloud-services
+
+  rabbitmq:
+    image: rabbitmq:management
+    ports:
+      - 5672:5672
+      - 15672:15672
+    volumes:
+      - ~/.docker-conf/rabbitmq/data/:/var/lib/rabbitmq/
+      - ~/.docker-conf/rabbitmq/log/:/var/log/rabbitmq
+
+    # environment:
+    #   - RABBITMQ_DEFAULT_USER=guest
+    #   - RABBITMQ_DEFAULT_PASS=guest
+    networks:
+      - cloud-services
+
+volumes:
+  userdb:
+    driver: local
+  orderdb:
+    driver: local
+
+networks:
+  cloud-services:
